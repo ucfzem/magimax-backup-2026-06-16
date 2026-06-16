@@ -1,0 +1,139 @@
+<!DOCTYPE html><html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MagiMax - Renommage IA</title>
+<style>
+body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;max-width:700px;margin:2rem auto;padding:0 1rem;background:#f4f6f8;color:#1a1a1a}.container{background:#fff;border-radius:12px;padding:2rem;box-shadow:0 4px 12px rgba(0,0,0,.08)}h1{margin-top:0;font-size:1.8rem}.field{margin-bottom:1.2rem}label{display:block;font-weight:600;margin-bottom:.3rem}input[type="url"],input[type="password"]{width:100%;padding:.5rem;border:1px solid #ccc;border-radius:6px;font-size:.95rem}.help{font-size:.8rem;color:#666;margin-top:.3rem}.upload-area{border:2px dashed #aaa;border-radius:10px;padding:2rem;text-align:center;background:#fafafa;margin-bottom:1rem;cursor:pointer;transition:background .2s}.upload-area:hover{background:#f0f0f0}#fileInput{display:none}.preview-grid{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}.preview-item{width:80px;height:80px;object-fit:cover;border-radius:6px;border:1px solid #ddd}.controls{margin:1rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}button{background:#2563eb;color:#fff;border:none;padding:.7rem 1.5rem;border-radius:8px;cursor:pointer;font-size:1rem}button:disabled{background:#94a3b8;cursor:not-allowed}.progress-bar{height:10px;background:#e2e8f0;border-radius:5px;margin:1rem 0;overflow:hidden;display:none}.progress-fill{height:100%;width:0%;background:#2563eb;transition:width .2s}.log{font-size:.9rem;color:#475569;margin-top:.5rem;max-height:300px;overflow-y:auto}.log-line{margin:2px 0;padding:2px 0;border-bottom:1px solid #f1f5f9}.download-btn{display:none;margin-top:1rem;background:#16a34a}.error{color:#b91c1c;background:#fee2e2;padding:.5rem;border-radius:6px;margin:.5rem 0;display:none}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🧠 MagiMax — Renommage IA par lot</h1>
+<p>Google Cloud Vision via proxy. Votre clé reste cachée côté serveur.</p>
+
+<div class="field">
+<label for="proxyUrl">URL du proxy</label>
+<input type="url" id="proxyUrl" placeholder="https://magimax-proxy-xxx.vercel.app/api/vision" />
+<div class="help">Déployez le proxy en 1 clic → <a href="https://github.com/ucfzem/magimax-vision-proxy" target="_blank">github.com/ucfzem/magimax-vision-proxy</a></div>
+</div>
+
+<div class="upload-area" id="uploadArea">
+<p>🖱️ Cliquez ou glissez-déposez (max 20 images)</p>
+<input type="file" id="fileInput" accept="image/*" multiple />
+</div>
+
+<div class="preview-grid" id="previewGrid"></div>
+
+<div class="controls">
+<label><input type="checkbox" id="includeImages" checked /> 🖼️ Inclure les images renommées</label>
+<button id="startBtn" disabled>🚀 Lancer</button>
+</div>
+
+<div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+<div class="log" id="logArea"></div>
+<button class="download-btn" id="downloadBtn" style="display:none;">📥 Télécharger le ZIP</button>
+<div id="errorMsg" class="error"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const proxyUrl=document.getElementById('proxyUrl');
+const fileInput=document.getElementById('fileInput');
+const uploadArea=document.getElementById('uploadArea');
+const previewGrid=document.getElementById('previewGrid');
+const startBtn=document.getElementById('startBtn');
+const includeImagesCb=document.getElementById('includeImages');
+const progressBar=document.getElementById('progressBar');
+const progressFill=document.getElementById('progressFill');
+const logArea=document.getElementById('logArea');
+const downloadBtn=document.getElementById('downloadBtn');
+const errorMsg=document.getElementById('errorMsg');
+
+let files=[], results=[], zipBlob=null;
+
+function log(m){const d=document.createElement('div');d.className='log-line';d.textContent=m;logArea.appendChild(d);logArea.scrollTop=logArea.scrollHeight}
+function err(m){errorMsg.style.display='block';errorMsg.textContent=m}
+function noerr(){errorMsg.style.display='none'}
+function slugify(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,50)}
+function safeName(n){return n.replace(/[^a-zA-Z0-9 _-]/g,'').trim()||'sans_nom'}
+function uniqueName(b,e,s){let c=b+e;if(!s.has(c)){s.add(c);return c}let i=2;while(1){c=b+'_'+i+e;if(!s.has(c)){s.add(c);return c}i++}}
+
+proxyUrl.addEventListener('input',()=>{startBtn.disabled=!(files.length>0&&proxyUrl.value.trim())});
+
+uploadArea.addEventListener('click',()=>fileInput.click());
+uploadArea.addEventListener('dragover',e=>{e.preventDefault();uploadArea.style.background='#e0e7ff'});
+uploadArea.addEventListener('dragleave',()=>{uploadArea.style.background='#fafafa'});
+uploadArea.addEventListener('drop',e=>{e.preventDefault();uploadArea.style.background='#fafafa';if(e.dataTransfer.files.length>0)handleFiles(e.dataTransfer.files)});
+fileInput.addEventListener('change',e=>handleFiles(e.target.files));
+
+function handleFiles(fl){
+let arr=Array.from(fl);
+if(arr.length>20){alert('Max 20 images');arr=arr.slice(0,20)}
+files=arr;updatePreview();startBtn.disabled=!(files.length>0&&proxyUrl.value.trim())
+}
+
+function updatePreview(){
+previewGrid.innerHTML='';
+files.forEach(f=>{
+if(!f.type.startsWith('image/'))return;
+const r=new FileReader();
+r.onload=e=>{const img=document.createElement('img');img.src=e.target.result;img.className='preview-item';previewGrid.appendChild(img)};
+r.readAsDataURL(f)
+})
+}
+
+async function analyze(imgB64,url){
+const r=await fetch(url,{
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify({image:imgB64})
+});
+if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||`HTTP ${r.status}`)}
+const d=await r.json();
+if(d.description)return slugify(d.description)||'image';
+throw new Error('Réponse invalide du proxy')
+}
+
+startBtn.addEventListener('click',async()=>{
+noerr();const url=proxyUrl.value.trim();
+if(!url){err('Entrez l\'URL du proxy');return}
+startBtn.disabled=true;progressBar.style.display='block';progressFill.style.width='0%';
+logArea.innerHTML='';log('Démarrage…');results=[];zipBlob=null;
+const n=files.length;
+for(let i=0;i<n;i++){
+const f=files[i];
+progressFill.style.width=Math.floor((i/n)*100)+'%';
+log(`[${i+1}/${n}] ${f.name}…`);
+let b64;
+try{
+const r=new FileReader();
+b64=await new Promise((res,rej)=>{r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(f)});
+}catch(e){results.push({orig:f.name,extrait:'ERREUR_LECTURE'});continue}
+let nom;
+try{nom=await analyze(b64,url)}catch(e){log(`  ⚠ ${e.message}`);nom='ERREUR_API'}
+results.push({orig:f.name,extrait:nom||'image',blob:f})
+}
+progressFill.style.width='100%';log('Génération ZIP…');
+const recap=results.map(r=>r.extrait).join('\n'),zip=new JSZip();
+zip.file('recapitulatif_noms.txt',recap);
+if(includeImagesCb.checked){
+const used=new Set();
+for(const r of results){
+const ext=r.orig.includes('.')?'.'+r.orig.split('.').pop():'.jpg';
+const base=safeName(r.extrait);
+zip.file(uniqueName(base,ext,used),r.blob)
+}
+}
+zipBlob=await zip.generateAsync({type:'blob'});
+downloadBtn.style.display='inline-block';log('🎉 ZIP prêt !');progressBar.style.display='none';startBtn.disabled=false
+});
+
+downloadBtn.addEventListener('click',()=>{
+if(!zipBlob)return;
+const url=URL.createObjectURL(zipBlob),a=document.createElement('a');
+a.href=url;a.download='MagiMax_resultats.zip';document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url)
+});
+</script>
+</body>
+</html>
